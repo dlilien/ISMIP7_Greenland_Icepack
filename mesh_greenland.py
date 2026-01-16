@@ -46,11 +46,10 @@ meps = meps.fillna(1.0e-8)
 fig, ax = plt.subplots()
 ax.imshow(meps, vmin=0, vmax=1, cmap="PuOr", extent=[meps.x[0], meps.x[-1], meps.y[-1], meps.y[0]])
 
-for outline, out_dir in zip(outlines, ["meshes", "simple_meshes"]):
+for outline, out_dir, stride in zip(outlines, ["meshes", "simple_meshes"], [2, 32]):
     coord_arr_rough = np.array(outline.geometry[0].exterior.xy).T[:, :]
 
     # Dork around with refining edges because we could be really rough
-    stride = 16
     coord_arr = np.zeros(((coord_arr_rough.shape[0] - 1) * stride + 1, 2))
     coord_arr[0::stride, :] = coord_arr_rough
     for i in range(1, stride):
@@ -273,6 +272,9 @@ for outline, out_dir in zip(outlines, ["meshes", "simple_meshes"]):
         gmsh.option.setNumber("Mesh.MshFileVersion",2.2)   
         gmsh.write(fn_base + ".msh")
         gmsh.finalize()
+
+        os.remove(fn_base + "_raw.msh")
+        os.remove(fn_base + "_sf.pos")
 
 
     if True:

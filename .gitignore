@@ -1,0 +1,10 @@
+*.pos
+*.msh
+*.sw?
+*.un~
+*.gpkg
+*.png
+*.pdf
+*.DS_Store
+*.ipynb_checkpoints
+meshes
