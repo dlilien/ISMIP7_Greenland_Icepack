@@ -17,10 +17,17 @@ from firedrake.petsc import PETSc
 import datetime
 import numpy as np
 
+twostep = True
 
-fn_template = "meshes/greenland_{:d}_{:d}.h5"
+mesh_dir = "meshes"
+fn_template = mesh_dir + "/greenland_{:d}_{:d}.h5"
 
-did = np.arange(1, 64).tolist()
+if mesh_dir == "meshes":
+    name = "detailed"
+    did = np.arange(1, 2289).tolist()
+else:
+    name = "simple"
+    did = np.arange(1, 64).tolist()
 
 opts0 = {
     "dirichlet_ids": did,
@@ -31,16 +38,16 @@ opts0 = {
         "snes_line_search_type": "bt",
         "snes_linesearch_order": 2,
         "snes_linesearch_max_it": 2500,
-        "snes_linesearch_damping": 0.1,
+        "snes_linesearch_damping": 0.05,
         "snes_max_it": 5000,
-        "snes_stol": 1.0e-8,
-        "snes_rtol": 1.0e-1,
-        "ksp_type": "preonly",
+        "snes_stol": 1.0e-4,
+        "snes_rtol": 1.0e-3,
+        "ksp_type": "bcgs",
         "ksp_max_it": 2500,
         "ksp_rtol": 1.0e-8,
         "ksp_atol": 1.0e-4,
         "ksp_converged_maxits": True,
-        "pc_type": "lu",
+        "pc_type": "bjacobi",
         # "pc_hypre_type": "boomeramg",
         "pc_factor_mat_solver_type": "mumps",
         "pc_factor_shift_amount": 1.0e-10,
@@ -49,9 +56,6 @@ opts0 = {
         # "ksp_monitor": None,
     },
 }
-
-
-
 opts1 = {
     "dirichlet_ids": did,
     # "side_wall_ids": [1, 3],
@@ -77,9 +81,23 @@ opts1 = {
     },
 }
 
+if firedrake.COMM_WORLD.size == 1:
+    lcs = np.array([250 * 2 ** i for i in range(4, 8)])
+elif firedrake.COMM_WORLD.size < 3:
+    lcs = np.array([250 * 2 ** i for i in range(2, 8)])
+elif firedrake.COMM_WORLD.size < 9:
+    lcs = np.array([250 * 2 ** i for i in range(2, 6)])
+elif firedrake.COMM_WORLD.size < 12:
+    lcs = np.array([250 * 2 ** i for i in range(1, 5)])
+else:
+    lcs = np.array([250 * 2 ** i for i in range(0, 4)])
 
-lcs = np.array([250 * 2 ** i for i in range(4,8)])
-elapsed = np.zeros_like(lcs)
+elapsed = np.zeros_like(lcs, dtype=float)
+dampings = np.zeros_like(lcs, dtype=float)
+delta0s = np.zeros_like(lcs, dtype=float)
+
+with open("timings_{:s}_n{:d}.txt".format(name, firedrake.COMM_WORLD.size), "w") as fout:
+    fout.write("nproc, lc (m), time (s), LS damping, TR delta0\n")
 
 for i, lc in enumerate(lcs):
     fn = fn_template.format(lc * 10, lc)
@@ -148,32 +166,61 @@ for i, lc in enumerate(lcs):
 
     model = icepack.models.HybridModel(friction=linear_pos_friction)
 
-    solver0 = icepack.solvers.FlowSolver(model, **opts0)
-    solver1 = icepack.solvers.FlowSolver(model, **opts1)
     PETSc.Sys.Print("Beginning initial velocity solve {:d}".format(lc))
 
-    start_time = datetime.datetime.now()
     u0 = firedrake.Function(V).interpolate(firedrake.Constant(1.0e-1) * u_obs)
-    if False:
-        PETSc.Sys.Print('Starting LS solve on {:d} processes'.format(firedrake.COMM_WORLD.size))
-        u0 = solver0.diagnostic_solve(
-            velocity=u0,
-            fluidity=A0,
-            C=C,
-            surface=h,
-            thickness=H
-        )
+    if twostep:
+        for damping in [0.5 * 10 ** (-i / 2) for i in range(11)]:
+            opts0["diagnostic_solver_parameters"]["snes_linesearch_damping"] = damping
+            solver0 = icepack.solvers.FlowSolver(model, **opts0)
+            PETSc.Sys.Print('Trying LS solve with damping = {:e}'.format(damping))
+            try:
+                start_time = datetime.datetime.now()
+                u0 = solver0.diagnostic_solve(
+                    velocity=u0,
+                    fluidity=A0,
+                    C=C,
+                    surface=h,
+                    thickness=H
+                )
+                end_time = datetime.datetime.now()
+                elapsed[i] = (end_time - start_time).seconds + (end_time - start_time).microseconds * 1e-6
+                dampings[i] = damping
+                break
+            except firedrake.exceptions.ConvergenceError:
+                pass
+        else:
+            dampings[i] = np.nan
+            PETSc.Sys.Print('LS Failed')
     PETSc.Sys.Print('Starting TR solve on {:d} processes'.format(firedrake.COMM_WORLD.size))
-    u0 = solver1.diagnostic_solve(
-        velocity=u0,
-        fluidity=A0,
-        C=C,
-        surface=h,
-        thickness=H
-    )
-    end_time = datetime.datetime.now()
-    elapsed[i] = (end_time - start_time).seconds
-    PETSc.Sys.Print('Solve on {:d} processes took {:d} s'.format(firedrake.COMM_WORLD.size, (end_time - start_time).seconds))
+    for d0 in [10 ** -(i / 2) * 1e7 for i in range(11)]:
+        opts1["diagnostic_solver_parameters"]["snes_tr_delta0"] = d0
+        solver1 = icepack.solvers.FlowSolver(model, **opts1)
+        PETSc.Sys.Print('Trying TR solve with d0 = {:e}'.format(d0))
+        try:
+            start_time = datetime.datetime.now()
+            u0 = solver1.diagnostic_solve(
+                velocity=u0,
+                fluidity=A0,
+                C=C,
+                surface=h,
+                thickness=H
+            )
+            end_time = datetime.datetime.now()
+            elapsed[i] += (end_time - start_time).seconds + (end_time - start_time).microseconds * 1e-6
+            delta0s[i] = d0
+            break
+        except firedrake.exceptions.ConvergenceError:
+            pass
+    else:
+        PETSc.Sys.Print('No solution found!')
+        delta0s[i] = np.nan
+
+    PETSc.Sys.Print('Solve on {:d} processes took {:d} s'.format(firedrake.COMM_WORLD.size, int(elapsed[i])))
+
+
+    with open("timings_{:s}_n{:d}.txt".format(name, firedrake.COMM_WORLD.size), "a") as fout:
+        fout.write("{:d}, {:d}, {:f}, {:e}, {:e}\n".format(firedrake.COMM_WORLD.size, lc, elapsed[i], dampings[i], delta0s[i]))
 
     if firedrake.COMM_WORLD.size == 1:
         fig, ax = plt.subplots(1, 2, figsize=(14, 7))
@@ -184,8 +231,3 @@ for i, lc in enumerate(lcs):
         ax[0].axis("equal")
         ax[1].axis("equal")
         fig.savefig(os.path.join("figs", os.path.split(os.path.splitext(fn)[0])[-1] + "_veltest.png"), dpi=300)
-
-with open("timings.txt", "w") as fout:
-    fout.write("lc (m), time (s)\n")
-    for lc, elapse in zip(lcs, elapsed):
-        fout.write("{:d}, {:d}\n".format(lc, elapse))
