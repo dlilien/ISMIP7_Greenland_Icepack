@@ -84,7 +84,7 @@ opts1 = {
 if firedrake.COMM_WORLD.size == 1:
     lcs = np.array([250 * 2 ** i for i in range(4, 8)])
 elif firedrake.COMM_WORLD.size < 3:
-    lcs = np.array([250 * 2 ** i for i in range(2, 8)])
+    lcs = np.array([250 * 2 ** i for i in range(3, 8)])
 elif firedrake.COMM_WORLD.size < 9:
     lcs = np.array([250 * 2 ** i for i in range(2, 6)])
 elif firedrake.COMM_WORLD.size < 13:

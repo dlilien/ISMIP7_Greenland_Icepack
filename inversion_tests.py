@@ -81,11 +81,11 @@ opts1 = {
 
 all_lcs = np.array([250 * 2 ** i for i in range(0, 8)])
 if firedrake.COMM_WORLD.size == 1:
-    lcs = all_lcs[8:4:-1]
+    lcs = all_lcs[8:3:-1]
 elif firedrake.COMM_WORLD.size < 3:
-    lcs = all_lcs[8:2:-1]
+    lcs = all_lcs[6:2:-1]
 elif firedrake.COMM_WORLD.size < 9:
-    lcs = all_lcs[2:6]
+    lcs = all_lcs[5:2:-1]
 elif firedrake.COMM_WORLD.size < 13:
     lcs = all_lcs[2:6]
 else:
@@ -218,14 +218,14 @@ for lc in lcs:
         controls=C,
     )
 
-    n_iter = 50
+    n_iter = 3
     estimator = MaximumProbabilityEstimator(
         problem,
         gradient_tolerance=1e-4,
         step_tolerance=1e-4,
         max_iterations=n_iter,
     )
-    print("Optimizing", out_template.format(name, lc))
+    PETSc.Sys.Print("Optimizing", out_template.format(name, lc))
 
     C = estimator.solve()
 
