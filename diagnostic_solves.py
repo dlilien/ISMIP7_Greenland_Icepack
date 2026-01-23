@@ -40,8 +40,8 @@ opts0 = {
         "snes_linesearch_max_it": 2500,
         "snes_linesearch_damping": 0.05,
         "snes_max_it": 5000,
-        "snes_stol": 1.0e-4,
-        "snes_rtol": 1.0e-3,
+        "snes_stol": 1.0e-6,
+        "snes_rtol": 1.0e-5,
         "ksp_type": "bcgs",
         "ksp_max_it": 2500,
         "ksp_rtol": 1.0e-8,
@@ -87,8 +87,8 @@ elif firedrake.COMM_WORLD.size < 3:
     lcs = np.array([250 * 2 ** i for i in range(2, 8)])
 elif firedrake.COMM_WORLD.size < 9:
     lcs = np.array([250 * 2 ** i for i in range(2, 6)])
-elif firedrake.COMM_WORLD.size < 12:
-    lcs = np.array([250 * 2 ** i for i in range(1, 5)])
+elif firedrake.COMM_WORLD.size < 13:
+    lcs = np.array([250 * 2 ** i for i in range(2, 6)])
 else:
     lcs = np.array([250 * 2 ** i for i in range(0, 4)])
 
@@ -96,7 +96,11 @@ elapsed = np.zeros_like(lcs, dtype=float)
 dampings = np.zeros_like(lcs, dtype=float)
 delta0s = np.zeros_like(lcs, dtype=float)
 
-with open("timings_{:s}_n{:d}.txt".format(name, firedrake.COMM_WORLD.size), "w") as fout:
+timing_fn = "timings_{:s}_n{:d}.txt".format(name, firedrake.COMM_WORLD.size)
+try_d0 = np.round(np.array([10 ** -(i / 2) * 1e7 for i in range(11)]), decimals=4)
+try_damping = np.round(np.array([0.5 * 10 ** (-i / 2) for i in range(11)]), decimals=4)
+
+with open(timing_fn, "w") as fout:
     fout.write("nproc, lc (m), time (s), LS damping, TR delta0\n")
 
 for i, lc in enumerate(lcs):
@@ -170,7 +174,7 @@ for i, lc in enumerate(lcs):
 
     u0 = firedrake.Function(V).interpolate(firedrake.Constant(1.0e-1) * u_obs)
     if twostep:
-        for damping in [0.5 * 10 ** (-i / 2) for i in range(11)]:
+        for damping in try_damping:
             opts0["diagnostic_solver_parameters"]["snes_linesearch_damping"] = damping
             solver0 = icepack.solvers.FlowSolver(model, **opts0)
             PETSc.Sys.Print('Trying LS solve with damping = {:e}'.format(damping))
@@ -193,7 +197,7 @@ for i, lc in enumerate(lcs):
             dampings[i] = np.nan
             PETSc.Sys.Print('LS Failed')
     PETSc.Sys.Print('Starting TR solve on {:d} processes'.format(firedrake.COMM_WORLD.size))
-    for d0 in [10 ** -(i / 2) * 1e7 for i in range(11)]:
+    for d0 in try_d0:
         opts1["diagnostic_solver_parameters"]["snes_tr_delta0"] = d0
         solver1 = icepack.solvers.FlowSolver(model, **opts1)
         PETSc.Sys.Print('Trying TR solve with d0 = {:e}'.format(d0))
@@ -218,8 +222,7 @@ for i, lc in enumerate(lcs):
 
     PETSc.Sys.Print('Solve on {:d} processes took {:d} s'.format(firedrake.COMM_WORLD.size, int(elapsed[i])))
 
-
-    with open("timings_{:s}_n{:d}.txt".format(name, firedrake.COMM_WORLD.size), "a") as fout:
+    with open(timing_fn, "a") as fout:
         fout.write("{:d}, {:d}, {:f}, {:e}, {:e}\n".format(firedrake.COMM_WORLD.size, lc, elapsed[i], dampings[i], delta0s[i]))
 
     if firedrake.COMM_WORLD.size == 1:
